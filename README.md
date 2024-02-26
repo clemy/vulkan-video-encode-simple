@@ -2,7 +2,7 @@
 
 This is a very simple example of how to use the Vulkan Video Encode Extension. It should provide a possibility to see the basic video encoding workflow.
 
-Frames are generated using a dynamic graphics pipeline rendering directly into RGB images (headless). Those frames are then converted into YCbCr (using a compute shader) and encoded using Vulkan into an H.264 video. The video packets are copied back to the host and stored in a file `./hwenc.264`.
+Frames are generated using a dynamic graphics pipeline rendering directly into RGB images (headless). Those frames are then converted into YCbCr (using a compute shader) and encoded using Vulkan into an H.264 video. The video packets are copied back to the host and stored in a file `./hwenc.264`. This is an H.264 elementary stream which can be viewed with ffmpeg/ffplay (or VLC).
 
 The encoder will generate a video stream with a simple GOP structure consisting of 1 IDR frame and 15 P frames.  
 The device initialization and frame generation is in `main.cpp`. All of the video encoding code is in `videoencoder.cpp` and `h264parameterset.hpp`.
