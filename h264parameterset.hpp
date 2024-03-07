@@ -6,7 +6,7 @@
 #include "vk_video/vulkan_video_codecs_common.h"
 
 namespace h264 {
-// from Nvidia sample code
+// adapted from Nvidia sample code
 
 static const uint32_t H264MbSizeAlignment = 16;
 
