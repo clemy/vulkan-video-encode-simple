@@ -93,6 +93,8 @@ class VideoEncoder {
     std::vector<VkDescriptorSet> m_computeDescriptorSets;
 
     VkSemaphore m_interQueueSemaphore;
+    VkSemaphore m_interQueueSemaphore2;
+    VkSemaphore m_interQueueSemaphore3;
 
     VkQueryPool m_queryPool;
     VkBuffer m_bitStreamBuffer;

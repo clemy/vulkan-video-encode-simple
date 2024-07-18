@@ -64,6 +64,8 @@ void VideoEncoder::init(VkPhysicalDevice physicalDevice, VkDevice device, VmaAll
     VkSemaphoreCreateInfo semaphoreInfo = {};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_interQueueSemaphore));
+    VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_interQueueSemaphore2));
+    VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_interQueueSemaphore3));
     VkFenceCreateInfo fenceInfo = {};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -333,9 +335,15 @@ void VideoEncoder::allocateIntermediateImages() {
     tmpImgCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     tmpImgCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     tmpImgCreateInfo.usage = VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    tmpImgCreateInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
-    tmpImgCreateInfo.queueFamilyIndexCount = 2;
-    tmpImgCreateInfo.pQueueFamilyIndices = queueFamilies;
+    if (m_computeQueueFamily == m_encodeQueueFamily) {
+        tmpImgCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        tmpImgCreateInfo.queueFamilyIndexCount = 0;
+        tmpImgCreateInfo.pQueueFamilyIndices = nullptr;
+    } else {
+        tmpImgCreateInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        tmpImgCreateInfo.queueFamilyIndexCount = 2;
+        tmpImgCreateInfo.pQueueFamilyIndices = queueFamilies;
+    }
     tmpImgCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     tmpImgCreateInfo.flags = 0;
     VmaAllocationCreateInfo allocInfo = {};
@@ -656,11 +664,19 @@ void VideoEncoder::convertRGBtoYCbCr(uint32_t currentImageIx) {
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
 
     VK_CHECK(vkEndCommandBuffer(m_computeCommandBuffer));
+    VkPipelineStageFlags dstStageMasks[] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+    VkSemaphore signalSemaphores[] = {m_interQueueSemaphore, m_interQueueSemaphore3};
+    VkSemaphore waitSemaphores[] = {m_interQueueSemaphore2, m_interQueueSemaphore3};
     VkSubmitInfo submitInfo{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                             .commandBufferCount = 1,
                             .pCommandBuffers = &m_computeCommandBuffer,
-                            .signalSemaphoreCount = 1,
-                            .pSignalSemaphores = &m_interQueueSemaphore};
+                            .signalSemaphoreCount = 2,
+                            .pSignalSemaphores = signalSemaphores};
+    if (m_frameCount != 0) {
+        submitInfo.waitSemaphoreCount = 2;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = dstStageMasks;
+    }
     VK_CHECK(vkQueueSubmit(m_computeQueue, 1, &submitInfo, VK_NULL_HANDLE));
 }
 
@@ -797,7 +813,9 @@ void VideoEncoder::encodeVideoFrame() {
                             .pWaitSemaphores = &m_interQueueSemaphore,
                             .pWaitDstStageMask = &dstStageMask,
                             .commandBufferCount = 1,
-                            .pCommandBuffers = &m_encodeCommandBuffer};
+                            .pCommandBuffers = &m_encodeCommandBuffer,
+                            .signalSemaphoreCount = 1,
+                            .pSignalSemaphores = &m_interQueueSemaphore2};
     VK_CHECK(vkResetFences(m_device, 1, &m_encodeFinishedFence));
     VK_CHECK(vkQueueSubmit(m_encodeQueue, 1, &submitInfo, m_encodeFinishedFence));
 }
@@ -840,6 +858,8 @@ void VideoEncoder::deinit() {
     }
     vkDestroyFence(m_device, m_encodeFinishedFence, nullptr);
     vkDestroySemaphore(m_device, m_interQueueSemaphore, nullptr);
+    vkDestroySemaphore(m_device, m_interQueueSemaphore2, nullptr);
+    vkDestroySemaphore(m_device, m_interQueueSemaphore3, nullptr);
     vkDestroyPipeline(m_device, m_computePipeline, nullptr);
     vkDestroyPipelineLayout(m_device, m_computePipelineLayout, nullptr);
     vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);

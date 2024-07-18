@@ -358,7 +358,18 @@ class VulkanApplication {
             .pAttachments = &colorBlendAttachment,
             .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f}};
 
+        const VkFormat colorAttachmentFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+        const VkPipelineRenderingCreateInfo renderingCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &colorAttachmentFormat,
+            .depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED};
+
         VkGraphicsPipelineCreateInfo pipelineInfo{.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                                                  .pNext = &renderingCreateInfo,
                                                   .stageCount = 2,
                                                   .pStages = shaderStages,
                                                   .pVertexInputState = &vertexInputInfo,
