@@ -190,6 +190,9 @@ void VideoEncoder::allocateVideoSessionMemory() {
     }
     VK_CHECK(vkGetVideoSessionMemoryRequirementsKHR(m_device, m_videoSession, &videoSessionMemoryRequirementsCount,
                                                     encodeSessionMemoryRequirements.data()));
+    if (videoSessionMemoryRequirementsCount == 0) {
+        return;
+    }
 
     std::vector<VkBindVideoSessionMemoryInfoKHR> encodeSessionBindMemory(videoSessionMemoryRequirementsCount);
     m_allocations.resize(videoSessionMemoryRequirementsCount);
