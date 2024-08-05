@@ -174,6 +174,15 @@ void VideoEncoder::createVideoSession() {
     capabilities.pNext = &encodeCapabilities;
 
     VkResult ret = vkGetPhysicalDeviceVideoCapabilitiesKHR(m_physicalDevice, &m_videoProfile, &capabilities);
+    
+    m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DEFAULT_KHR;
+    if (encodeCapabilities.rateControlModes & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_VBR_BIT_KHR) {
+        m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_VBR_BIT_KHR;
+    } else if (encodeCapabilities.rateControlModes & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_CBR_BIT_KHR) {
+        m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_CBR_BIT_KHR;
+    } else if (encodeCapabilities.rateControlModes & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR) {
+        m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR;
+    }
 
     VK_CHECK(vkCreateVideoSessionKHR(m_device, &createInfo, nullptr, &m_videoSession));
 }
@@ -514,13 +523,14 @@ void VideoEncoder::initRateControl(VkCommandBuffer cmdBuf, uint32_t fps) {
     m_encodeRateControlLayerInfo.averageBitrate = 5000000;
     m_encodeRateControlLayerInfo.maxBitrate = 20000000;
 
-    m_encodeH264RateControlInfo.flags = VK_VIDEO_ENCODE_H264_RATE_CONTROL_REGULAR_GOP_BIT_KHR;
+    m_encodeH264RateControlInfo.flags = VK_VIDEO_ENCODE_H264_RATE_CONTROL_REGULAR_GOP_BIT_KHR |
+                                        VK_VIDEO_ENCODE_H264_RATE_CONTROL_REFERENCE_PATTERN_FLAT_BIT_KHR;
     m_encodeH264RateControlInfo.gopFrameCount = 16;
     m_encodeH264RateControlInfo.idrPeriod = 16;
     m_encodeH264RateControlInfo.consecutiveBFrameCount = 0;
     m_encodeH264RateControlInfo.temporalLayerCount = 1;
 
-    m_encodeRateControlInfo.rateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_VBR_BIT_KHR;
+    m_encodeRateControlInfo.rateControlMode = m_chosenRateControlMode;
     m_encodeRateControlInfo.pNext = &m_encodeH264RateControlInfo;
     m_encodeRateControlInfo.layerCount = 1;
     m_encodeRateControlInfo.pLayers = &m_encodeRateControlLayerInfo;
@@ -531,6 +541,15 @@ void VideoEncoder::initRateControl(VkCommandBuffer cmdBuf, uint32_t fps) {
     codingControlInfo.flags =
         VK_VIDEO_CODING_CONTROL_RESET_BIT_KHR | VK_VIDEO_CODING_CONTROL_ENCODE_RATE_CONTROL_BIT_KHR;
     codingControlInfo.pNext = &m_encodeRateControlInfo;
+
+    if (m_encodeRateControlInfo.rateControlMode & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_CBR_BIT_KHR) {
+        m_encodeRateControlLayerInfo.averageBitrate = m_encodeRateControlLayerInfo.maxBitrate;
+    }
+    if (m_encodeRateControlInfo.rateControlMode & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR ||
+        m_encodeRateControlInfo.rateControlMode == VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DEFAULT_KHR) {
+        m_encodeH264RateControlInfo.temporalLayerCount = 0;
+        m_encodeRateControlInfo.layerCount = 0;
+    }
 
     VkVideoEndCodingInfoKHR encodeEndInfo = {VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR};
 
@@ -781,7 +800,8 @@ void VideoEncoder::encodeVideoFrame() {
     inputPicResource.baseArrayLayer = 0;
 
     // set all the frame parameters
-    h264::FrameInfo frameInfo(gopFrameCount, m_width, m_height, m_sps, m_pps, gopFrameCount);
+    h264::FrameInfo frameInfo(gopFrameCount, m_width, m_height, m_sps, m_pps, gopFrameCount,
+                              m_chosenRateControlMode & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR);
     VkVideoEncodeH264PictureInfoKHR* encodeH264FrameInfo = frameInfo.getEncodeH264FrameInfo();
 
     // combine all structures in one control structure

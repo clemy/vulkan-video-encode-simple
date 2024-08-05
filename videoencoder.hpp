@@ -78,6 +78,8 @@ class VideoEncoder {
     VkVideoProfileInfoKHR m_videoProfile;
     VkVideoProfileListInfoKHR m_videoProfileList;
 
+    VkVideoEncodeRateControlModeFlagBitsKHR m_chosenRateControlMode;
+
     VkVideoEncodeH264RateControlLayerInfoKHR m_encodeH264RateControlLayerInfo = {
         VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_RATE_CONTROL_LAYER_INFO_KHR};
     VkVideoEncodeRateControlLayerInfoKHR m_encodeRateControlLayerInfo = {
