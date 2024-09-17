@@ -57,7 +57,7 @@ void VideoEncoder::init(VkPhysicalDevice physicalDevice, VkDevice device, VmaAll
     readBitstreamHeader();
     allocateOutputBitStream();
     allocateReferenceImages(2);
-    allocateIntermediateImages();
+    allocateIntermediateImage();
     createOutputQueryPool();
     createYCbCrConversionPipeline(inputImageViews);
 
@@ -394,19 +394,19 @@ void VideoEncoder::allocateReferenceImages(uint32_t count) {
     }
 }
 
-void VideoEncoder::allocateIntermediateImages() {
+void VideoEncoder::allocateIntermediateImage() {
     uint32_t queueFamilies[] = {m_computeQueueFamily, m_encodeQueueFamily};
     VkImageCreateInfo tmpImgCreateInfo;
     tmpImgCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     tmpImgCreateInfo.pNext = &m_videoProfileList;
     tmpImgCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-    tmpImgCreateInfo.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    tmpImgCreateInfo.format = m_chosenSrcImageFormat;
     tmpImgCreateInfo.extent = {m_width, m_height, 1};
     tmpImgCreateInfo.mipLevels = 1;
     tmpImgCreateInfo.arrayLayers = 1;
     tmpImgCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     tmpImgCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    tmpImgCreateInfo.usage = VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    tmpImgCreateInfo.usage = VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_STORAGE_BIT;
     if (m_computeQueueFamily == m_encodeQueueFamily) {
         tmpImgCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         tmpImgCreateInfo.queueFamilyIndexCount = 0;
@@ -417,16 +417,23 @@ void VideoEncoder::allocateIntermediateImages() {
         tmpImgCreateInfo.pQueueFamilyIndices = queueFamilies;
     }
     tmpImgCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    tmpImgCreateInfo.flags = 0;
+    // this is causing a validation error as Nvidia driver is not returning those create flags
+    // in vkGetPhysicalDeviceVideoFormatPropertiesKHR
+    tmpImgCreateInfo.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     VK_CHECK(
         vmaCreateImage(m_allocator, &tmpImgCreateInfo, &allocInfo, &m_yCbCrImage, &m_yCbCrImageAllocation, nullptr));
+
+    VkImageViewUsageCreateInfo viewUsageInfo = {};
+    viewUsageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+    viewUsageInfo.usage = VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR;
     VkImageViewCreateInfo viewInfo = {};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.pNext = &viewUsageInfo;
     viewInfo.image = m_yCbCrImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    viewInfo.format = m_chosenSrcImageFormat;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
@@ -434,26 +441,22 @@ void VideoEncoder::allocateIntermediateImages() {
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImageView));
 
-    tmpImgCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
-    tmpImgCreateInfo.pNext = nullptr;
-    tmpImgCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    tmpImgCreateInfo.queueFamilyIndexCount = 0;
-    tmpImgCreateInfo.pQueueFamilyIndices = nullptr;
-
-    tmpImgCreateInfo.format = VK_FORMAT_R8_UNORM;
-    VK_CHECK(vmaCreateImage(m_allocator, &tmpImgCreateInfo, &allocInfo, &m_yCbCrImageLuma, &m_yCbCrImageLumaAllocation,
-                            nullptr));
-    viewInfo.image = m_yCbCrImageLuma;
+    viewUsageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+    uint32_t numPlanes = (m_chosenSrcImageFormat == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM) ? 2 : 3;
+    m_yCbCrImagePlaneViews.resize(numPlanes);
     viewInfo.format = VK_FORMAT_R8_UNORM;
-    VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImageLumaView));
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImagePlaneViews[0]));
 
-    tmpImgCreateInfo.format = VK_FORMAT_R8G8_UNORM;
-    tmpImgCreateInfo.extent = {m_width / 2, m_height / 2, 1};
-    VK_CHECK(vmaCreateImage(m_allocator, &tmpImgCreateInfo, &allocInfo, &m_yCbCrImageChroma,
-                            &m_yCbCrImageChromaAllocation, nullptr));
-    viewInfo.image = m_yCbCrImageChroma;
-    viewInfo.format = VK_FORMAT_R8G8_UNORM;
-    VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImageChromaView));
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+    if (numPlanes == 2) {
+        viewInfo.format = VK_FORMAT_R8G8_UNORM;
+        VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImagePlaneViews[1]));
+    } else {
+        VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImagePlaneViews[1]));
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_2_BIT;
+        VK_CHECK(vkCreateImageView(m_device, &viewInfo, nullptr, &m_yCbCrImagePlaneViews[2]));
+    }
 }
 
 void VideoEncoder::createOutputQueryPool() {
@@ -483,7 +486,7 @@ void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>&
     computeShaderStageInfo.module = computeShaderModule;
     computeShaderStageInfo.pName = "main";
 
-    std::array<VkDescriptorSetLayoutBinding, 3> layoutBindings{};
+    std::array<VkDescriptorSetLayoutBinding, 4> layoutBindings{};
     for (uint32_t i = 0; i < layoutBindings.size(); i++) {
         layoutBindings[i].binding = i;
         layoutBindings[i].descriptorCount = 1;
@@ -494,7 +497,7 @@ void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>&
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = (uint32_t)layoutBindings.size();
+    layoutInfo.bindingCount = 1 + m_yCbCrImagePlaneViews.size();
     layoutInfo.pBindings = layoutBindings.data();
     VK_CHECK(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_computeDescriptorSetLayout));
 
@@ -515,7 +518,7 @@ void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>&
     const int maxFramesCount = static_cast<uint32_t>(inputImageViews.size());
     std::array<VkDescriptorPoolSize, 1> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[0].descriptorCount = 3 * maxFramesCount;
+    poolSizes[0].descriptorCount = 4 * maxFramesCount;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = (uint32_t)poolSizes.size();
@@ -533,42 +536,34 @@ void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>&
     m_computeDescriptorSets.resize(maxFramesCount);
     VK_CHECK(vkAllocateDescriptorSets(m_device, &descAllocInfo, m_computeDescriptorSets.data()));
     for (size_t i = 0; i < maxFramesCount; i++) {
-        std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+        std::array<VkWriteDescriptorSet, 4> descriptorWrites{};
+        std::array<VkDescriptorImageInfo, 4> imageInfos{};
 
-        VkDescriptorImageInfo imageInfo0{};
-        imageInfo0.imageView = inputImageViews[i];
-        imageInfo0.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imageInfos[0].imageView = inputImageViews[i];
+        imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imageInfos[0].sampler = VK_NULL_HANDLE;
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = m_computeDescriptorSets[i];
         descriptorWrites[0].dstBinding = 0;
         descriptorWrites[0].dstArrayElement = 0;
         descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pImageInfo = &imageInfo0;
+        descriptorWrites[0].pImageInfo = &imageInfos[0];
 
-        VkDescriptorImageInfo imageInfo1{};
-        imageInfo1.imageView = m_yCbCrImageLumaView;
-        imageInfo1.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = m_computeDescriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo1;
+        for (uint32_t p = 0; p < m_yCbCrImagePlaneViews.size(); ++p) {
+            imageInfos[p + 1].imageView = m_yCbCrImagePlaneViews[p];
+            imageInfos[p + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            imageInfos[p + 1].sampler = VK_NULL_HANDLE;
+            descriptorWrites[p + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[p + 1].dstSet = m_computeDescriptorSets[i];
+            descriptorWrites[p + 1].dstBinding = p + 1;
+            descriptorWrites[p + 1].dstArrayElement = 0;
+            descriptorWrites[p + 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            descriptorWrites[p + 1].descriptorCount = 1;
+            descriptorWrites[p + 1].pImageInfo = &imageInfos[p + 1];
+        }
 
-        VkDescriptorImageInfo imageInfo2{};
-        imageInfo2.imageView = m_yCbCrImageChromaView;
-        imageInfo2.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[2].dstSet = m_computeDescriptorSets[i];
-        descriptorWrites[2].dstBinding = 2;
-        descriptorWrites[2].dstArrayElement = 0;
-        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        descriptorWrites[2].descriptorCount = 1;
-        descriptorWrites[2].pImageInfo = &imageInfo2;
-
-        vkUpdateDescriptorSets(m_device, (uint32_t)descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
+        vkUpdateDescriptorSets(m_device, 1 + m_yCbCrImagePlaneViews.size(), descriptorWrites.data(), 0, nullptr);
     }
 }
 
@@ -658,24 +653,25 @@ void VideoEncoder::convertRGBtoYCbCr(uint32_t currentImageIx) {
     VK_CHECK(vkBeginCommandBuffer(m_computeCommandBuffer, &beginInfo));
 
     std::vector<VkImageMemoryBarrier2> barriers;
-    VkImageMemoryBarrier2 imageMemoryBarrier{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                             .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                             .subresourceRange = {
-                                                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                 .baseMipLevel = 0,
-                                                 .levelCount = 1,
-                                                 .baseArrayLayer = 0,
-                                                 .layerCount = 1,
-                                             }};
-    // transition YCbCr image (luma and chroma) to be shader target
+    VkImageMemoryBarrier2 imageMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        }};
+    // transition YCbCr image (luma and chroma planes) to be shader target
     imageMemoryBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
     imageMemoryBarrier.srcAccessMask = VK_ACCESS_2_NONE;
     imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageMemoryBarrier.image = m_yCbCrImageLuma;
+    imageMemoryBarrier.image = m_yCbCrImage;
     imageMemoryBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    barriers.push_back(imageMemoryBarrier);
-    imageMemoryBarrier.image = m_yCbCrImageChroma;
+    if (m_yCbCrImagePlaneViews.size() >= 3)
+        imageMemoryBarrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_PLANE_2_BIT;
     barriers.push_back(imageMemoryBarrier);
     // transition source image to be shader source
     imageMemoryBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -683,6 +679,7 @@ void VideoEncoder::convertRGBtoYCbCr(uint32_t currentImageIx) {
     imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     imageMemoryBarrier.image = m_inputImages[currentImageIx];
     imageMemoryBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    imageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barriers.push_back(imageMemoryBarrier);
     VkDependencyInfoKHR dependencyInfo{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR,
                                        .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
@@ -695,55 +692,6 @@ void VideoEncoder::convertRGBtoYCbCr(uint32_t currentImageIx) {
                             &m_computeDescriptorSets[currentImageIx], 0, 0);
     vkCmdDispatch(m_computeCommandBuffer, (m_width + 15) / 16, (m_height + 15) / 16,
                   1);  // work item local size = 16x16
-
-    barriers.clear();
-    // transition the luma and chroma images to be copy source
-    imageMemoryBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    imageMemoryBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    imageMemoryBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    imageMemoryBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-    imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageMemoryBarrier.image = m_yCbCrImageLuma;
-    barriers.push_back(imageMemoryBarrier);
-    imageMemoryBarrier.image = m_yCbCrImageChroma;
-    barriers.push_back(imageMemoryBarrier);
-
-    // transition the full YCbCr image as copy target
-    imageMemoryBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-    imageMemoryBarrier.srcAccessMask = VK_ACCESS_2_NONE;
-    imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageMemoryBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT;
-    imageMemoryBarrier.image = m_yCbCrImage;
-    barriers.push_back(imageMemoryBarrier);
-
-    dependencyInfo.imageMemoryBarrierCount = barriers.size();
-    dependencyInfo.pImageMemoryBarriers = barriers.data();
-    vkCmdPipelineBarrier2(m_computeCommandBuffer, &dependencyInfo);
-
-    // copy the full luma image into the 1st plane of the YCbCr image
-    VkImageCopy regions;
-    regions.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    regions.srcSubresource.baseArrayLayer = 0;
-    regions.srcSubresource.layerCount = 1;
-    regions.srcSubresource.mipLevel = 0;
-    regions.srcOffset = {0, 0, 0};
-    regions.dstSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
-    regions.dstSubresource.baseArrayLayer = 0;
-    regions.dstSubresource.layerCount = 1;
-    regions.dstSubresource.mipLevel = 0;
-    regions.dstOffset = {0, 0, 0};
-    regions.extent = {m_width, m_height, 1};
-    vkCmdCopyImage(m_computeCommandBuffer, m_yCbCrImageLuma, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_yCbCrImage,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
-
-    // copy the full chroma image into the 2nd plane of the YCbCr image
-    regions.dstSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
-    regions.extent = {m_width / 2, m_height / 2, 1};
-    vkCmdCopyImage(m_computeCommandBuffer, m_yCbCrImageChroma, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_yCbCrImage,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
 
     VK_CHECK(vkEndCommandBuffer(m_computeCommandBuffer));
     VkPipelineStageFlags dstStageMasks[] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
@@ -833,15 +781,15 @@ void VideoEncoder::encodeVideoFrame() {
     // transition the YCbCr image to be a video encode source
     VkImageMemoryBarrier2 imageMemoryBarrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
-        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+        .srcAccessMask = VK_ACCESS_2_NONE,
         .dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR,
         .dstAccessMask = VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR,
-        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
         .newLayout = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
         .image = m_yCbCrImage,
         .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
@@ -955,10 +903,10 @@ void VideoEncoder::deinit() {
     vkDestroyQueryPool(m_device, m_queryPool, nullptr);
     vmaUnmapMemory(m_allocator, m_bitStreamBufferAllocation);
     vmaDestroyBuffer(m_allocator, m_bitStreamBuffer, m_bitStreamBufferAllocation);
-    vkDestroyImageView(m_device, m_yCbCrImageChromaView, nullptr);
-    vmaDestroyImage(m_allocator, m_yCbCrImageChroma, m_yCbCrImageChromaAllocation);
-    vkDestroyImageView(m_device, m_yCbCrImageLumaView, nullptr);
-    vmaDestroyImage(m_allocator, m_yCbCrImageLuma, m_yCbCrImageLumaAllocation);
+    for (uint32_t i = 0; i < m_yCbCrImagePlaneViews.size(); i++) {
+        vkDestroyImageView(m_device, m_yCbCrImagePlaneViews[i], nullptr);
+    }
+    m_yCbCrImagePlaneViews.clear();
     vkDestroyImageView(m_device, m_yCbCrImageView, nullptr);
     vmaDestroyImage(m_allocator, m_yCbCrImage, m_yCbCrImageAllocation);
     for (uint32_t i = 0; i < m_dpbImages.size(); i++) {

@@ -43,7 +43,7 @@ class VideoEncoder {
     void readBitstreamHeader();
     void allocateOutputBitStream();
     void allocateReferenceImages(uint32_t count);
-    void allocateIntermediateImages();
+    void allocateIntermediateImage();
     void createOutputQueryPool();
     void createYCbCrConversionPipeline(const std::vector<VkImageView>& inputImageViews);
     void initRateControl(VkCommandBuffer cmdBuf, uint32_t fps);
@@ -111,12 +111,7 @@ class VideoEncoder {
     VkImage m_yCbCrImage;
     VmaAllocation m_yCbCrImageAllocation;
     VkImageView m_yCbCrImageView;
-    VkImage m_yCbCrImageLuma;
-    VmaAllocation m_yCbCrImageLumaAllocation;
-    VkImageView m_yCbCrImageLumaView;
-    VkImage m_yCbCrImageChroma;
-    VmaAllocation m_yCbCrImageChromaAllocation;
-    VkImageView m_yCbCrImageChromaView;
+    std::vector<VkImageView> m_yCbCrImagePlaneViews;
 
     std::vector<VkImage> m_dpbImages;
     std::vector<VmaAllocation> m_dpbImageAllocations;
