@@ -23,8 +23,7 @@ cmake ..
 cmake --build .
 
 rem run
-cd Debug
-headless.exe
+Debug\headless.exe
 
 rem play the video file
 ffplay hwenc.264

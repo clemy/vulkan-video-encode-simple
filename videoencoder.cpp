@@ -411,7 +411,7 @@ void VideoEncoder::createOutputQueryPool() {
 }
 
 void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>& inputImageViews) {
-    auto computeShaderCode = readFile("../shaders/rgb-ycbcr-shader.comp.spv");
+    auto computeShaderCode = readFile("shaders/rgb-ycbcr-shader.comp.spv");
     VkShaderModuleCreateInfo createInfo{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                         .codeSize = computeShaderCode.size(),
                                         .pCode = reinterpret_cast<const uint32_t*>(computeShaderCode.data())};
