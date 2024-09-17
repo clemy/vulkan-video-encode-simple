@@ -204,7 +204,8 @@ void VideoEncoder::createVideoSession() {
 
     m_chosenSrcImageFormat = VK_FORMAT_UNDEFINED;
     for (const auto& formatProperties: srcVideoFormatProperties) {
-        if (formatProperties.format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM) {
+        if (formatProperties.format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ||
+            formatProperties.format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM) {
             // Nvidia driver supports mutable & extended usage, but is not returning those flags
             //constexpr VkImageCreateFlags neededCreateFlags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
             //if ((formatProperties.imageCreateFlags & neededCreateFlags) != neededCreateFlags) {
@@ -474,7 +475,10 @@ void VideoEncoder::createOutputQueryPool() {
 }
 
 void VideoEncoder::createYCbCrConversionPipeline(const std::vector<VkImageView>& inputImageViews) {
-    auto computeShaderCode = readFile("shaders/rgb-ycbcr-shader.comp.spv");
+    const char* shaderFileName = m_yCbCrImagePlaneViews.size() == 2 ? "shaders/rgb-ycbcr-shader-2plane.comp.spv"
+                                                                    : "shaders/rgb-ycbcr-shader-3plane.comp.spv";
+    printf("Using %s\n", shaderFileName);
+    auto computeShaderCode = readFile(shaderFileName);
     VkShaderModuleCreateInfo createInfo{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                         .codeSize = computeShaderCode.size(),
                                         .pCode = reinterpret_cast<const uint32_t*>(computeShaderCode.data())};

@@ -1,0 +1,36 @@
+/*
+ * Vulkan Video Encode Extension - Simple Example
+ * Copyright (c) 2024 Bernhard C. Schrenk <clemy@clemy.org>
+ *
+ * This file is licensed under the MIT license.
+ * See the LICENSE file in the project root for full license information.
+ */
+
+#version 450
+
+layout (binding = 0, rgba8) uniform readonly image2D inputImage;
+layout (binding = 1, r8) uniform writeonly image2D outputImage0;
+layout (binding = 2, r8) uniform writeonly image2D outputImage1;
+layout (binding = 3, r8) uniform writeonly image2D outputImage2;
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Conversion matrix from RGB to YCbCr
+// RGB.a must be set to 1.0
+// GLSL uses column major order: matrix looks transposed
+const mat4 rgb2ycbcr = mat4(
+    0.299, -0.169,  0.5,   0,
+    0.587, -0.331, -0.419, 0,
+    0.114,  0.5,   -0.081, 0,
+    0    ,  0.5,    0.5,   1
+);
+
+void main() {
+    vec4 rgba = vec4(imageLoad(inputImage,  ivec2(gl_GlobalInvocationID.xy)).rgb, 1.0);
+
+    vec4 ycbcra = rgb2ycbcr * rgba;
+
+    imageStore(outputImage0, ivec2(gl_GlobalInvocationID.xy), vec4(ycbcra.x));
+    imageStore(outputImage1, ivec2(gl_GlobalInvocationID.x / 2, gl_GlobalInvocationID.y / 2), vec4(ycbcra.y));
+    imageStore(outputImage2, ivec2(gl_GlobalInvocationID.x / 2, gl_GlobalInvocationID.y / 2), vec4(ycbcra.z));
+}
