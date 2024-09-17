@@ -150,18 +150,6 @@ void VideoEncoder::createVideoSession() {
     m_videoProfileList.profileCount = 1;
     m_videoProfileList.pProfiles = &m_videoProfile;
 
-    static const VkExtensionProperties h264StdExtensionVersion = {VK_STD_VULKAN_VIDEO_CODEC_H264_ENCODE_EXTENSION_NAME,
-                                                                  VK_STD_VULKAN_VIDEO_CODEC_H264_ENCODE_SPEC_VERSION};
-    VkVideoSessionCreateInfoKHR createInfo = {VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR};
-    createInfo.pVideoProfile = &m_videoProfile;
-    createInfo.queueFamilyIndex = m_encodeQueueFamily;
-    createInfo.pictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
-    createInfo.maxCodedExtent = {m_width, m_height};
-    createInfo.maxDpbSlots = 16;
-    createInfo.maxActiveReferencePictures = 16;
-    createInfo.referencePictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
-    createInfo.pStdHeaderVersion = &h264StdExtensionVersion;
-
     VkVideoEncodeH264CapabilitiesKHR h264capabilities = {};
     h264capabilities.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_CAPABILITIES_KHR;
 
@@ -173,7 +161,7 @@ void VideoEncoder::createVideoSession() {
     capabilities.sType = VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR;
     capabilities.pNext = &encodeCapabilities;
 
-    VkResult ret = vkGetPhysicalDeviceVideoCapabilitiesKHR(m_physicalDevice, &m_videoProfile, &capabilities);
+    VK_CHECK(vkGetPhysicalDeviceVideoCapabilitiesKHR(m_physicalDevice, &m_videoProfile, &capabilities));
     
     m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DEFAULT_KHR;
     if (encodeCapabilities.rateControlModes & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_VBR_BIT_KHR) {
@@ -183,6 +171,78 @@ void VideoEncoder::createVideoSession() {
     } else if (encodeCapabilities.rateControlModes & VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR) {
         m_chosenRateControlMode = VK_VIDEO_ENCODE_RATE_CONTROL_MODE_DISABLED_BIT_KHR;
     }
+
+    VkPhysicalDeviceVideoEncodeQualityLevelInfoKHR qualityLevelInfo = {};
+    qualityLevelInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_QUALITY_LEVEL_INFO_KHR;
+    qualityLevelInfo.pVideoProfile = &m_videoProfile;
+    qualityLevelInfo.qualityLevel = 0;
+
+    VkVideoEncodeH264QualityLevelPropertiesKHR h264QualityLevelProperties = {};
+    h264QualityLevelProperties.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_QUALITY_LEVEL_PROPERTIES_KHR;
+    VkVideoEncodeQualityLevelPropertiesKHR qualityLevelProperties = {};
+    qualityLevelProperties.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_QUALITY_LEVEL_PROPERTIES_KHR;
+    qualityLevelProperties.pNext = &h264QualityLevelProperties;
+
+    VK_CHECK(vkGetPhysicalDeviceVideoEncodeQualityLevelPropertiesKHR(m_physicalDevice, &qualityLevelInfo,
+                                                                  &qualityLevelProperties));
+
+    VkPhysicalDeviceVideoFormatInfoKHR videoFormatInfo = {};
+    videoFormatInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR;
+    videoFormatInfo.pNext = &m_videoProfileList;
+    videoFormatInfo.imageUsage =
+        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    uint32_t videoFormatPropertyCount;
+    VK_CHECK(vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_physicalDevice, &videoFormatInfo, &videoFormatPropertyCount,
+                                                nullptr));
+    std::vector<VkVideoFormatPropertiesKHR> srcVideoFormatProperties(videoFormatPropertyCount);
+    for (uint32_t i = 0; i < videoFormatPropertyCount; i++) {
+        memset(&srcVideoFormatProperties[i], 0, sizeof(VkVideoFormatPropertiesKHR));
+        srcVideoFormatProperties[i].sType = VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR;
+    }
+    VK_CHECK(vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_physicalDevice, &videoFormatInfo, &videoFormatPropertyCount,
+                                                         srcVideoFormatProperties.data()));
+
+    m_chosenSrcImageFormat = VK_FORMAT_UNDEFINED;
+    for (const auto& formatProperties: srcVideoFormatProperties) {
+        if (formatProperties.format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM) {
+            // Nvidia driver supports mutable & extended usage, but is not returning those flags
+            //constexpr VkImageCreateFlags neededCreateFlags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+            //if ((formatProperties.imageCreateFlags & neededCreateFlags) != neededCreateFlags) {
+            //    printf("Skipping format %d, imageCreateFlags not supported\n", formatProperties.format);
+            //    continue;
+            //}
+            m_chosenSrcImageFormat = formatProperties.format;
+            break;
+        }
+    }
+    if (m_chosenSrcImageFormat == VK_FORMAT_UNDEFINED)
+        throw std::runtime_error("Error: no supported video encode source image format");
+
+    videoFormatInfo.imageUsage = VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR;
+    VK_CHECK(vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_physicalDevice, &videoFormatInfo, &videoFormatPropertyCount,
+                                                         nullptr));
+    std::vector<VkVideoFormatPropertiesKHR> dpbVideoFormatProperties(videoFormatPropertyCount);
+    for (uint32_t i = 0; i < videoFormatPropertyCount; i++) {
+        memset(&dpbVideoFormatProperties[i], 0, sizeof(VkVideoFormatPropertiesKHR));
+        dpbVideoFormatProperties[i].sType = VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR;
+    }
+    VK_CHECK(vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_physicalDevice, &videoFormatInfo, &videoFormatPropertyCount,
+                                                         dpbVideoFormatProperties.data()));
+    if (dpbVideoFormatProperties.size() < 1)
+        throw std::runtime_error("Error: no supported video encode DPB image format");
+    m_chosenDpbImageFormat = dpbVideoFormatProperties[0].format;
+
+    static const VkExtensionProperties h264StdExtensionVersion = {VK_STD_VULKAN_VIDEO_CODEC_H264_ENCODE_EXTENSION_NAME,
+                                                                  VK_STD_VULKAN_VIDEO_CODEC_H264_ENCODE_SPEC_VERSION};
+    VkVideoSessionCreateInfoKHR createInfo = {VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR};
+    createInfo.pVideoProfile = &m_videoProfile;
+    createInfo.queueFamilyIndex = m_encodeQueueFamily;
+    createInfo.pictureFormat = m_chosenSrcImageFormat;
+    createInfo.maxCodedExtent = {m_width, m_height};
+    createInfo.maxDpbSlots = 16;
+    createInfo.maxActiveReferencePictures = 16;
+    createInfo.referencePictureFormat = m_chosenDpbImageFormat;
+    createInfo.pStdHeaderVersion = &h264StdExtensionVersion;
 
     VK_CHECK(vkCreateVideoSessionKHR(m_device, &createInfo, nullptr, &m_videoSession));
 }
@@ -304,7 +364,7 @@ void VideoEncoder::allocateReferenceImages(uint32_t count) {
         tmpImgCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         tmpImgCreateInfo.pNext = &m_videoProfileList;
         tmpImgCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-        tmpImgCreateInfo.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+        tmpImgCreateInfo.format = m_chosenDpbImageFormat;
         tmpImgCreateInfo.extent = {m_width, m_height, 1};
         tmpImgCreateInfo.mipLevels = 1;
         tmpImgCreateInfo.arrayLayers = 1;
@@ -324,7 +384,7 @@ void VideoEncoder::allocateReferenceImages(uint32_t count) {
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_dpbImages[i];
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+        viewInfo.format = m_chosenDpbImageFormat;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.baseMipLevel = 0;
         viewInfo.subresourceRange.levelCount = 1;
