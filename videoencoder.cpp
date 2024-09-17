@@ -809,6 +809,7 @@ void VideoEncoder::encodeVideoFrame() {
     videoEncodeInfo.pNext = encodeH264FrameInfo;
     videoEncodeInfo.dstBuffer = m_bitStreamBuffer;
     videoEncodeInfo.dstBufferOffset = 0;
+    videoEncodeInfo.dstBufferRange = 4 * 1024 * 1024;
     videoEncodeInfo.srcPictureResource = inputPicResource;
     referenceSlots[0].slotIndex = gopFrameCount & 1;
     videoEncodeInfo.pSetupReferenceSlot = &referenceSlots[0];
@@ -865,6 +866,8 @@ void VideoEncoder::getOutputVideoPacket(const char*& data, size_t& size) {
     // return bitstream
     data = m_bitStreamData + encodeResult.bitstreamStartOffset;
     size = encodeResult.bitstreamSize;
+    printf("Encoded frame %d, status %d, offset %d, size %zd\n", m_frameCount, encodeResult.status,
+           encodeResult.bitstreamStartOffset, size);
 }
 
 void VideoEncoder::deinit() {
