@@ -29,9 +29,15 @@
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #define VMA_IMPLEMENTATION
-#include <vma/vk_mem_alloc.h>
 #define VOLK_IMPLEMENTATION
-#include <volk/volk.h>
+#ifdef __linux__
+    #include <vk_mem_alloc.h>
+    #include <volk.h>
+#else
+    #include <vma/vk_mem_alloc.h>
+    #include <volk/volk.h>
+#endif
+
 
 #include "utility.hpp"
 #include "videoencoder.hpp"

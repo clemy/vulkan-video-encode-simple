@@ -16,8 +16,13 @@
 
 #pragma once
 #define VK_NO_PROTOTYPES
-#include <vma/vk_mem_alloc.h>
-#include <volk/volk.h>
+#ifdef __linux__
+    #include <vk_mem_alloc.h>
+    #include <volk.h>
+#else
+    #include <vma/vk_mem_alloc.h>
+    #include <volk/volk.h>
+#endif
 
 #include <vector>
 
